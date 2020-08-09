@@ -2,7 +2,6 @@ use async_std::net::{TcpStream};
 use async_std::fs;
 use std::time::Duration;
 use async_std::task;
-use std::io::prelude::*;
 use async_std::io::{BufReader, BufWriter};
 use regex::Regex;
 use async_std::prelude::*;
@@ -52,8 +51,8 @@ struct IRCBotClient {
 }
 
 impl EasyReader {
-    async fn new(stream: Arc<TcpStream>) -> EasyReader {
-        EasyReader { line: String::new(), reader: BufReader::new(&*stream) }
+    fn new(stream: TcpStream) -> EasyReader {
+        EasyReader { line: String::new(), reader: BufReader::new(stream) }
     }
 
     async fn read_line(&mut self) -> std::io::Result<usize> {
@@ -67,7 +66,7 @@ impl IRCBotClient {
         // Creates the stream object that will go into the client.
         let stream = Arc::new(TcpStream::connect("irc.chat.twitch.tv:6667").await.unwrap());
         // Get a stream reference to use for reading.
-        let reader = EasyReader::new(Arc::clone(stream));
+        let reader = EasyReader::new(&*Arc::clone(&stream));
         IRCBotClient { 
             stream: stream,
             nick: nick,
@@ -79,11 +78,11 @@ impl IRCBotClient {
 
     async fn authenticate(&mut self) -> () {
         println!("Writing password...");
-        self.stream.send_pass(&self.secret).await?;
-        println!("Writing nickname...").await?;
-        self.stream.send_nick(&self.nick).await?; 
+        self.stream.send_pass(&self.secret).await;
+        println!("Writing nickname...").await;
+        self.stream.send_nick(&self.nick).await; 
         println!("Writing join command...");
-        self.stream.send_join(&self.channel).await?; 
+        self.stream.send_join(&self.channel).await; 
     }
 }
 
