@@ -1,34 +1,39 @@
-use std::net::{TcpStream};
-use std::io::{Read, Write};
-use std::fs;
-use std::{thread, time};
+use async_std::net::{TcpStream};
+use async_std::fs;
+use std::time::Duration;
+use async_std::task;
 use std::io::prelude::*;
-use std::io::{BufReader, BufWriter};
+use async_std::io::{BufReader, BufWriter};
 use regex::Regex;
+use async_std::prelude::*;
+use async_trait::async_trait;
+use std::sync::Arc;
 
+#[async_trait]
 trait IRCStream {
-    fn send_pass(&mut self, pass: &String) -> ();
-    fn send_nick(&mut self, nick: &String) -> ();
-    fn send_join(&mut self, join: &String) -> ();
-    fn send(&mut self, to_send: String) -> ();
+    async fn send_pass(&mut self, pass: &String) -> ();
+    async fn send_nick(&mut self, nick: &String) -> ();
+    async fn send_join(&mut self, join: &String) -> ();
+    async fn send(&mut self, to_send: String) -> ();
 }
 
+#[async_trait]
 impl IRCStream for TcpStream {
     // This trait is probably a little unwieldy, but... so cool!
-    fn send_pass(&mut self, pass: &String) {
-        &self.send(format!("PASS {}", pass));
+    async fn send_pass(&mut self, pass: &String) {
+        &self.send(format!("PASS {}", pass)).await;
     }
 
-    fn send_nick(&mut self, nick: &String) {
-        &self.send(format!("NICK {}", nick));
+    async fn send_nick(&mut self, nick: &String) {
+        &self.send(format!("NICK {}", nick)).await;
     }
 
-    fn send_join(&mut self, to_join: &String) {
-        &self.send(format!("JOIN #{}", to_join));
+    async fn send_join(&mut self, to_join: &String) {
+        &self.send(format!("JOIN #{}", to_join)).await;
     }
 
-    fn send(&mut self, to_send: String) {
-        let _ = &self.write(format!("{}\r\n", to_send).as_bytes()); 
+    async fn send(&mut self, to_send: String) {
+        let _ = &self.write(format!("{}\r\n", to_send).as_bytes()).await; 
     }
 }
 
@@ -39,7 +44,7 @@ struct EasyReader {
 }
 
 struct IRCBotClient {
-    stream: TcpStream,
+    stream: Arc<TcpStream>,
     nick: String,
     secret: String,
     channel: String,
@@ -47,22 +52,22 @@ struct IRCBotClient {
 }
 
 impl EasyReader {
-    fn new(stream: TcpStream) -> EasyReader {
-        EasyReader { line: String::new(), reader: BufReader::new(stream) }
+    async fn new(stream: Arc<TcpStream>) -> EasyReader {
+        EasyReader { line: String::new(), reader: BufReader::new(&*stream) }
     }
 
-    fn read_line(&mut self) -> std::io::Result<usize> {
+    async fn read_line(&mut self) -> std::io::Result<usize> {
         self.line.clear();
-        self.reader.read_line(&mut self.line)
+        self.reader.read_line(&mut self.line).await
     }
 }
 
 impl IRCBotClient {
-    fn connect(nick: String, secret: String, channel: String) -> IRCBotClient {
+    async fn connect(nick: String, secret: String, channel: String) -> IRCBotClient {
         // Creates the stream object that will go into the client.
-        let stream = TcpStream::connect("irc.chat.twitch.tv:6667").unwrap();
+        let stream = Arc::new(TcpStream::connect("irc.chat.twitch.tv:6667").await.unwrap());
         // Get a stream reference to use for reading.
-        let reader = EasyReader::new(stream.try_clone().expect("Failed to get a stream reader."));
+        let reader = EasyReader::new(Arc::clone(stream));
         IRCBotClient { 
             stream: stream,
             nick: nick,
@@ -72,13 +77,13 @@ impl IRCBotClient {
         }
     }
 
-    fn authenticate(&mut self) -> () {
+    async fn authenticate(&mut self) -> () {
         println!("Writing password...");
-        self.stream.send_pass(&self.secret);
-        println!("Writing nickname...");
-        self.stream.send_nick(&self.nick); 
+        self.stream.send_pass(&self.secret).await?;
+        println!("Writing nickname...").await?;
+        self.stream.send_nick(&self.nick).await?; 
         println!("Writing join command...");
-        self.stream.send_join(&self.channel); 
+        self.stream.send_join(&self.channel).await?; 
     }
 }
 
@@ -97,7 +102,7 @@ fn main()
 
     println!("Nick: {} | Secret: {} | Channel: {}", nick, secret, channel);
 
-    let mut client = IRCBotClient::connect(nick, secret, channel);
+    let mut client = task::block_on(async {IRCBotClient::connect(nick, secret, channel).await?});
     client.authenticate();     
 
     println!("Starting loop.");
@@ -120,7 +125,6 @@ fn main()
         };
         println!("[Parsed Command] Name: {} | Command: '{}'", name, command);
 
-        let t = time::Duration::from_secs(1);
-        thread::sleep(t);
+        task::block_on(async { task::sleep(Duration::from_secs(1)).await; });
     }
 }
