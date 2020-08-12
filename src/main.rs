@@ -4,7 +4,9 @@ use async_std::fs;
 use std::time::Duration;
 use async_std::task;
 use async_std::io::{BufReader, BufWriter, Read};
+use std::io::Result;
 use regex::Regex;
+use lazy_static::lazy_static;
 use async_std::prelude::*;
 use async_trait::async_trait;
 use std::sync::Arc;
@@ -15,8 +17,8 @@ trait CaptureExt {
 }
 
 impl CaptureExt for regex::Captures {
-    fn str_at(&self, i: usize) {
-        &self.get(i).unwrap().as_str().to_string()
+    fn str_at(&self, i: usize) -> String {
+        self.get(i).unwrap().as_str().to_string()
     }
 }
 
@@ -67,7 +69,7 @@ impl EasyReader {
         EasyReader { line: String::new(), reader: BufReader::new(stream) }
     }
 
-    async fn read_line(&mut self) -> std::io::Result<usize> {
+    async fn read_line(&mut self) -> Result<usize> {
         self.line.clear();
         self.reader.read_line(&mut self.line).await
     }
@@ -85,6 +87,7 @@ impl IRCBotClient {
             secret: secret,
             channel: channel,
             reader: reader,
+            queue: std::collections::VecDeque::<String>::new()
         }
     }
 
@@ -103,6 +106,44 @@ impl IRCBotClient {
 
     async fn do_command(&mut self, user: String, cmd: String) -> () {
 
+    }
+
+    async fn launch_read(&mut self) -> Result<String> {
+        lazy_static! {
+            static ref priv_re: Regex = Regex::new(r":(\w*)!\w*@\w*\.tmi\.twitch\.tv PRIVMSG #\w* :\s*(bot |!|~)\s*(.+?)\s*$").unwrap();
+        }
+
+        loop {
+            match &self.reader.read_line().await {
+                Ok(line) => {
+                    let line = &self.reader.line;
+                    println!("[Received] Message: {}", line.trim());
+                    let (name, command) = match priv_re.captures(line.as_str())
+                    {
+                        // there must be a better way...
+                        Some(caps) => (caps.str_at(1), caps.str_at(3)),
+                        None => continue
+                    };
+                    println!("[Parsed Command] Name: {} | Command: '{}'", name, command);
+                    //client.do_command(name, command).await;
+                },
+                Err(e) => {
+                    println!("Encountered error: {}", e);
+                    continue;
+                }
+            }
+        }
+        return Ok("Finished reading.".to_string());
+    }
+
+    async fn launch_write(&mut self) -> Result<String> {
+        loop {
+            match &self.queue.pop_front() {
+                Some(message) => println!("Didn't actually send {}, but hey...", message),
+                None => task::yield_now()
+            }
+        }
+        return Ok("Done writing.".to_string());
     }
 }
 
@@ -127,7 +168,6 @@ async fn async_main() {
     println!("Starting loop.");
 
     //:desktopfolder!desktopfolder@desktopfolder.tmi.twitch.tv PRIVMSG #desktopfolder :~cmd
-    let priv_re = Regex::new(r":(\w*)!\w*@\w*\.tmi\.twitch\.tv PRIVMSG #\w* :\s*(bot |!|~)\s*(.+?)\s*$").unwrap();
 
     /* Tasks in Rust
      * Spawning tasks puts them into the event loop.
@@ -160,28 +200,14 @@ async fn async_main() {
     task::spawn(is_async());
 
     select! {
-        return_message = client.launch_read() => match return_message {
-            Ok(message) => { println!("Quit: {}", message); },
-            Err(error) => { println!("Error: {}", error); }
-        }
-        line = client.reader.read_line().fuse() => match line {
-            Ok(line) => {
-                let line = &client.reader.line;
-                println!("[Received] Message: {}", line.trim());
-                let (name, command) = match priv_re.captures(line.as_str())
-                {
-                    // there must be a better way...
-                    Some(caps) => (caps.str_at(1), caps.str_at(3)),
-                    None => continue
-                };
-                println!("[Parsed Command] Name: {} | Command: '{}'", name, command);
-                client.do_command(name, command).await;
-            },
-            Err(e) => {
-                println!("Encountered error: {}", e);
-                continue;
-            }
-        }
+        return_message = client.launch_read().fuse() => match return_message {
+            Ok(message) => { println!("Quit (Read): {}", message); },
+            Err(error) => { println!("Error (Read): {}", error); }
+        },
+        return_message = client.launch_write().fuse() => match return_message {
+            Ok(message) => { println!("Quit (Write): {}", message); },
+            Err(error) => { println!("Error (Write): {}", error); }
+        },
     }
 }
 

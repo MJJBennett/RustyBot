@@ -427,6 +427,7 @@ dependencies = [
  "async-std",
  "async-trait",
  "futures",
+ "lazy_static",
  "regex",
  "serde_json",
 ]
