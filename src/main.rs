@@ -1,3 +1,4 @@
+#![recursion_limit="1024"]
 use async_std::net::{TcpStream};
 use async_std::fs;
 use std::time::Duration;
@@ -7,7 +8,17 @@ use regex::Regex;
 use async_std::prelude::*;
 use async_trait::async_trait;
 use std::sync::Arc;
-use futures::{select};
+use futures::{select, FutureExt};
+
+trait CaptureExt {
+    fn str_at(&self, i: usize) -> String;
+}
+
+impl CaptureExt for regex::Captures {
+    fn str_at(&self, i: usize) {
+        &self.get(i).unwrap().as_str().to_string()
+    }
+}
 
 #[async_trait]
 trait IRCStream {
@@ -118,32 +129,62 @@ async fn async_main() {
     //:desktopfolder!desktopfolder@desktopfolder.tmi.twitch.tv PRIVMSG #desktopfolder :~cmd
     let priv_re = Regex::new(r":(\w*)!\w*@\w*\.tmi\.twitch\.tv PRIVMSG #\w* :\s*(bot |!|~)\s*(.+?)\s*$").unwrap();
 
-    loop {
-        select! {
-            line = client.reader.read_line() => match line {
-                Ok(line) => {
-                    let line = &client.reader.line;
-                    println!("[Received] Message: {}", line.trim());
-                    let (name, command) = match priv_re.captures(line.as_str())
-                    {
-                        Some(caps) => (caps.get(1).unwrap().as_str(), caps.get(3).unwrap().as_str()),
-                        None => continue
-                    };
-                    println!("[Parsed Command] Name: {} | Command: '{}'", name, command);
-                    client.do_command(name, command).await;
-                },
-                Err(e) => {
-                    println!("Encountered error: {}", e);
-                    continue;
-                }
-            },
-            _ = task::sleep(Duration::from_secs(1)) =
+    /* Tasks in Rust
+     * Spawning tasks puts them into the event loop.
+     */
 
-            task::block_on(async { task::sleep(Duration::from_secs(1)).await; });
+    async fn is_async() {
+        println!("Are we async yet?!");
+        task::sleep(Duration::from_secs(1)).await;
+        println!("Are we async yet?!");
+        task::sleep(Duration::from_secs(1)).await;
+        println!("Are we async yet?!");
+        task::sleep(Duration::from_secs(1)).await;
+        println!("Are we async yet?!");
+        task::sleep(Duration::from_secs(1)).await;
+        println!("Are we async yet?!");
+        task::sleep(Duration::from_secs(1)).await;
+        println!("Are we async yet?!");
+        task::sleep(Duration::from_secs(1)).await;
+        println!("Are we async yet?!");
+        task::sleep(Duration::from_secs(1)).await;
+        println!("Are we async yet?!");
+        task::sleep(Duration::from_secs(1)).await;
+        println!("Are we async yet?!");
+        task::sleep(Duration::from_secs(1)).await;
+        println!("Are we async yet?!");
+        task::sleep(Duration::from_secs(1)).await;
+        println!("We're async!");
+    };
+
+    task::spawn(is_async());
+
+    select! {
+        return_message = client.launch_read() => match return_message {
+            Ok(message) => { println!("Quit: {}", message); },
+            Err(error) => { println!("Error: {}", error); }
+        }
+        line = client.reader.read_line().fuse() => match line {
+            Ok(line) => {
+                let line = &client.reader.line;
+                println!("[Received] Message: {}", line.trim());
+                let (name, command) = match priv_re.captures(line.as_str())
+                {
+                    // there must be a better way...
+                    Some(caps) => (caps.str_at(1), caps.str_at(3)),
+                    None => continue
+                };
+                println!("[Parsed Command] Name: {} | Command: '{}'", name, command);
+                client.do_command(name, command).await;
+            },
+            Err(e) => {
+                println!("Encountered error: {}", e);
+                continue;
+            }
         }
     }
 }
 
 fn main() {
-    task::block_on(async { async_main().await })
+    task::block_on(async_main())
 }
