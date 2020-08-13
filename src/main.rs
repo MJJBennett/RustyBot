@@ -21,6 +21,12 @@ enum Command {
     Continue,
 }
 
+// Actually totally unrelated to the above...
+enum CommandType {
+    Raw,
+    PrivMsg,
+}
+
 // Temporary until I find the correct way to do this.
 trait CaptureExt {
     fn str_at(&self, i: usize) -> String;
@@ -44,19 +50,19 @@ trait IRCStream {
 impl IRCStream for TcpStream {
     // This trait is probably a little unwieldy, but... so cool!
     async fn send_pass(&mut self, pass: &String) {
-        &self.send(format!("PASS {}", pass)).await;
+        self.send(format!("PASS {}", pass)).await;
     }
 
     async fn send_nick(&mut self, nick: &String) {
-        &self.send(format!("NICK {}", nick)).await;
+        self.send(format!("NICK {}", nick)).await;
     }
 
     async fn send_join(&mut self, to_join: &String) {
-        &self.send(format!("JOIN #{}", to_join)).await;
+        self.send(format!("JOIN #{}", to_join)).await;
     }
 
     async fn send(&mut self, to_send: String) {
-        let _ = &self.write(format!("{}\r\n", to_send).as_bytes()).await; 
+        let _ = self.write(format!("{}\r\n", to_send).as_bytes()).await; 
     }
 }
 
@@ -72,17 +78,16 @@ struct IRCBotClient {
 struct IRCBotMessageSender {
     writer: TcpStream,
     queue: Receiver::<String>,
-    channel: String,
 }
 
 impl IRCBotMessageSender {
     async fn launch_write(&mut self) {
         loop {
             println!("Awaiting writes...");
-            match &self.queue.recv().await {
+            match self.queue.recv().await {
                 Ok(s) => {
                     println!("Sending: '{}'", s);
-                    &self.writer.send(format!("PRIVMSG #{} :{}", &self.channel, s)).await;
+                    self.writer.send(s).await;
                 },
                 Err(e) => { 
                     println!("Uh oh, queue receive error: {}", e);
@@ -107,14 +112,20 @@ impl IRCBotClient {
             secret: secret,
             reader: reader,
             sender: s,
-            channel: channel.clone()
+            channel: channel
         }, IRCBotMessageSender {
             writer: stream,
             queue: r,
-            channel: channel
         })
         // return the async class for writing back down the TcpStream instead, which contains the
         // receiver + the tcpstream clone
+    }
+
+    fn format_twitch(&self, m: String, t: CommandType) -> String {
+        match t {
+            CommandType::Raw => m,
+            CommandType::PrivMsg => format!("PRIVMSG #{} :{}", self.channel, m),
+        }
     }
 
     async fn authenticate(&mut self) -> () {
@@ -126,20 +137,37 @@ impl IRCBotClient {
         self.stream.send_join(&self.channel).await; 
     }
 
+    async fn privmsg(&mut self, m: String) -> () {
+        self.sender.send(self.format_twitch(m, CommandType::PrivMsg)).await;
+    }
+
+    async fn do_elevated(&mut self, mut cmd: String) -> Command {
+        if cmd.starts_with("stop") { Command::Stop }
+        else if cmd.starts_with("raw") { self.sender.send(cmd.split_off(4)).await; Command::Continue }
+        else if cmd.starts_with("say") { self.privmsg(cmd.split_off(4)).await; Command::Continue }
+        else { Command::Continue }
+    }
+
     async fn do_command(&mut self, user: String, cmd: String) -> Command {
         println!("[Parsed Command] Name: {} | Command: '{}'", user, cmd);
         if user == "desktopfolder" && cmd.starts_with("Stop") { return Command::Stop; }
 
         // Ideally, load a tree from JSON or similar
-        if cmd == "bnb" { self.sender.send("Brand new bot!".to_string()).await; }
-        Command::Continue
+        if cmd == "bnb" { 
+            self.privmsg("Brand new bot!".to_string()).await; 
+            Command::Continue
+        }
+        else if user == "desktopfolder" {
+            self.do_elevated(cmd).await
+        }
+        else { Command::Continue }
     }
 
     async fn handle_twitch(&mut self, line: &String) -> Command {
         match line.trim() {
             "" => Command::Stop,
             "PING :tmi.twitch.tv" => {
-                self.sender.send("PING!".to_string()).await;
+                self.sender.send("PONG :tmi.twitch.tv".to_string()).await;
                 Command::Continue
             }
             _ => Command::Continue,
@@ -154,7 +182,7 @@ impl IRCBotClient {
 
         loop {
             line.clear();
-            match &self.reader.read_line(&mut line).await {
+            match self.reader.read_line(&mut line).await {
                 Ok(_) => {
                     println!("[Received] Message: '{}'", line.trim());
                     let (name, command) = match PRIV_RE.captures(line.as_str())
