@@ -1,17 +1,27 @@
-#![recursion_limit="1024"]
-use async_std::net::{TcpStream};
-// TODO use async_channel instead of unstable+slower
-use async_std::sync::{Receiver, Sender};
 use std::time::Duration;
-use async_std::task;
-use async_std::io::{BufReader, BufWriter, Read};
 use std::io::Result;
 use regex::Regex;
 use lazy_static::lazy_static;
-use async_std::prelude::*;
 use async_trait::async_trait;
 use futures::{select, FutureExt};
+use async_std::{
+    // TODO use async_channel instead of unstable+slower
+    sync::{
+        Receiver,
+        Sender
+    },
+    io::BufReader,
+    net::TcpStream,
+    prelude::*,
+    task,
+};
 
+enum Command {
+    Stop,
+    Continue,
+}
+
+// Temporary until I find the correct way to do this.
 trait CaptureExt {
     fn str_at(&self, i: usize) -> String;
 }
@@ -50,30 +60,13 @@ impl IRCStream for TcpStream {
     }
 }
 
-struct EasyReader {
-    line: String, 
-    // Use direct <TcpStream> for now, could template EasyReader later
-    reader: BufReader::<TcpStream>
-}
-
 struct IRCBotClient {
     stream: TcpStream,
     nick: String,
     secret: String,
-    reader: EasyReader,
+    reader: BufReader::<TcpStream>,
     sender: Sender::<String>,
     channel: String,
-}
-
-impl EasyReader {
-    fn new(stream: TcpStream) -> EasyReader {
-        EasyReader { line: String::new(), reader: BufReader::new(stream) }
-    }
-
-    async fn read_line(&mut self) -> Result<usize> {
-        self.line.clear();
-        self.reader.read_line(&mut self.line).await
-    }
 }
 
 struct IRCBotMessageSender {
@@ -89,13 +82,14 @@ impl IRCBotMessageSender {
             match &self.queue.recv().await {
                 Ok(s) => {
                     println!("Sending: '{}'", s);
-                    &self.writer.send(format!("PRIVMSG #{} :Ok! See: {}", &self.channel, s)).await;
+                    &self.writer.send(format!("PRIVMSG #{} :{}", &self.channel, s)).await;
                 },
                 Err(e) => { 
                     println!("Uh oh, queue receive error: {}", e);
                     break;
                 }
             }
+            task::sleep(Duration::from_millis(100)).await;
         }
     }
 }
@@ -105,7 +99,7 @@ impl IRCBotClient {
         // Creates the stream object that will go into the client.
         let stream = TcpStream::connect("irc.chat.twitch.tv:6667").await.unwrap();
         // Get a stream reference to use for reading.
-        let reader = EasyReader::new(stream.clone());
+        let reader = BufReader::new(stream.clone());
         let (s, r) = async_std::sync::channel(10); // 10 is capacity of buffer
         (IRCBotClient { 
             stream: stream.clone(),
@@ -132,35 +126,47 @@ impl IRCBotClient {
         self.stream.send_join(&self.channel).await; 
     }
 
-    /*
-    async fn do_command(&mut self, user: String, cmd: String) -> () {
+    async fn do_command(&mut self, user: String, cmd: String) -> Command {
+        println!("[Parsed Command] Name: {} | Command: '{}'", user, cmd);
+        if user == "desktopfolder" && cmd.starts_with("Stop") { return Command::Stop; }
 
+        // Ideally, load a tree from JSON or similar
+        if cmd == "bnb" { self.sender.send("Brand new bot!".to_string()).await; }
+        Command::Continue
     }
-    */
+
+    async fn handle_twitch(&mut self, line: &String) -> Command {
+        match line.trim() {
+            "" => Command::Stop,
+            "PING :tmi.twitch.tv" => {
+                self.sender.send("PING!".to_string()).await;
+                Command::Continue
+            }
+            _ => Command::Continue,
+        }
+    }
 
     async fn launch_read(&mut self) -> Result<String> {
         lazy_static! {
             static ref PRIV_RE: Regex = Regex::new(r":(\w*)!\w*@\w*\.tmi\.twitch\.tv PRIVMSG #\w* :\s*(bot |!|~)\s*(.+?)\s*$").unwrap();
         }
+        let mut line = String::new();
 
         loop {
-            match &self.reader.read_line().await {
+            line.clear();
+            match &self.reader.read_line(&mut line).await {
                 Ok(_) => {
-                    let line = &self.reader.line;
-                    println!("[Received] Message: {}", line.trim());
+                    println!("[Received] Message: '{}'", line.trim());
                     let (name, command) = match PRIV_RE.captures(line.as_str())
                     {
                         // there must be a better way...
                         Some(caps) => (caps.str_at(1), caps.str_at(3)),
-                        None => continue
+                        None => {
+                            if let Command::Stop = self.handle_twitch(&line).await { break; }
+                            continue;
+                        }
                     };
-                    println!("[Parsed Command] Name: {} | Command: '{}'", name, command);
-                    if command.starts_with("Stop") { break; }
-                    //client.do_command(name, command).await;
-                    if command.starts_with("Send") { 
-                        println!("Adding to sender.");
-                        self.sender.send(command).await; 
-                    }
+                    if let Command::Stop = self.do_command(name, command).await { break; }
                 },
                 Err(e) => {
                     println!("Encountered error: {}", e);
@@ -168,18 +174,8 @@ impl IRCBotClient {
                 }
             }
         }
-        return Ok("Finished reading.".to_string());
+        Ok("Finished reading.".to_string())
     }
-
-    /*
-    async fn launch_write(&self) -> ! {
-        loop {
-            match &self.queue.pop_front() {
-                Some(message) => println!("Didn't actually send {}, but hey...", message),
-                None => task::yield_now().await
-            }
-        }
-    }*/
 }
 
 fn get_file_trimmed(filename: &str) -> String {
@@ -190,7 +186,6 @@ fn get_file_trimmed(filename: &str) -> String {
 }
 
 async fn async_main() {
-
     let nick = get_file_trimmed("auth/user.txt");
     let secret = get_file_trimmed("auth/secret.txt");
     let channel = get_file_trimmed("auth/id.txt");
@@ -198,41 +193,7 @@ async fn async_main() {
     println!("Nick: {} | Secret: {} | Channel: {}", nick, secret, channel);
 
     let (mut client, mut forwarder) = IRCBotClient::connect(nick, secret, channel).await;
-    client.authenticate().await;     
-
-    println!("Starting loop.");
-
-    //:desktopfolder!desktopfolder@desktopfolder.tmi.twitch.tv PRIVMSG #desktopfolder :~cmd
-
-    /* Tasks in Rust
-     * Spawning tasks puts them into the event loop.
-     */
-
-    async fn is_async() {
-        println!("Are we async yet?!");
-        task::sleep(Duration::from_secs(1)).await;
-        println!("Are we async yet?!");
-        task::sleep(Duration::from_secs(2)).await;
-        println!("Are we async yet?!");
-        task::sleep(Duration::from_secs(3)).await;
-        println!("Are we async yet?!");
-        task::sleep(Duration::from_secs(4)).await;
-        println!("Are we async yet?!");
-        task::sleep(Duration::from_secs(5)).await;
-        println!("Are we async yet?!");
-        task::sleep(Duration::from_secs(6)).await;
-        println!("Are we async yet?!");
-        task::sleep(Duration::from_secs(8)).await;
-        println!("Are we async yet?!");
-        task::sleep(Duration::from_secs(8)).await;
-        println!("Are we async yet?!");
-        task::sleep(Duration::from_secs(8)).await;
-        println!("Are we async yet?!");
-        task::sleep(Duration::from_secs(7)).await;
-        println!("We're async!");
-    };
-
-    task::spawn(is_async());
+    client.authenticate().await;
 
     select! {
         return_message = client.launch_read().fuse() => match return_message {
@@ -240,10 +201,7 @@ async fn async_main() {
             Err(error) => { println!("Error (Read): {}", error); }
         },
         () = forwarder.launch_write().fuse() => {}
-        //return_message = laun.launch_write().fuse() => {}
     }
 }
 
-fn main() {
-    task::block_on(async_main())
-}
+fn main() { task::block_on(async_main()) }
