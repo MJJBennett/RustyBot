@@ -83,7 +83,6 @@ struct IRCBotMessageSender {
 impl IRCBotMessageSender {
     async fn launch_write(&mut self) {
         loop {
-            println!("Awaiting writes...");
             match self.queue.recv().await {
                 Ok(s) => {
                     println!("Sending: '{}'", s);
@@ -189,12 +188,14 @@ impl IRCBotClient {
                     {
                         // there must be a better way...
                         Some(caps) => (caps.str_at(1), caps.str_at(3)),
-                        None => {
-                            if let Command::Stop = self.handle_twitch(&line).await { break; }
-                            continue;
+                        None => match self.handle_twitch(&line).await {
+                                Command::Stop => return Ok("Stopped due to twitch.".to_string()),
+                                _ => continue
                         }
                     };
-                    if let Command::Stop = self.do_command(name, command).await { break; }
+                    if let Command::Stop = self.do_command(name, command).await { 
+                        return Ok("Received stop command.".to_string()); 
+                    }
                 },
                 Err(e) => {
                     println!("Encountered error: {}", e);
@@ -202,7 +203,6 @@ impl IRCBotClient {
                 }
             }
         }
-        Ok("Finished reading.".to_string())
     }
 }
 
