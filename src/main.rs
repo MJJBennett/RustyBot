@@ -4,6 +4,7 @@ use regex::Regex;
 use lazy_static::lazy_static;
 use async_trait::async_trait;
 use futures::{select, FutureExt};
+use std::path::Path;
 use async_std::{
     // TODO use async_channel instead of unstable+slower
     sync::{
@@ -15,6 +16,8 @@ use async_std::{
     prelude::*,
     task,
 };
+
+use rustybot::command_tree::CommandTree;
 
 enum Command {
     Stop,
@@ -232,4 +235,7 @@ async fn async_main() {
     }
 }
 
-fn main() { task::block_on(async_main()) }
+fn main() {
+    let _ = CommandTree::setup_new(Path::new("test.json"));
+    //task::block_on(async_main()) 
+}
