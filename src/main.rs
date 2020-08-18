@@ -236,6 +236,7 @@ async fn async_main() {
 }
 
 fn main() {
-    let _ = CommandTree::setup_new(Path::new("test.json"));
+    let ct = CommandTree::from_json_file(Path::new("commands.json"));
+    ct.dump_file(Path::new("commands.parsed.json"));
     //task::block_on(async_main()) 
 }

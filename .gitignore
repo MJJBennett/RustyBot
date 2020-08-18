@@ -6,3 +6,4 @@ people.json
 *.swp
 test.json
 commands.json
+commands.parsed.json
