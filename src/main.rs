@@ -5,6 +5,7 @@ use lazy_static::lazy_static;
 use async_trait::async_trait;
 use futures::{select, FutureExt};
 use std::path::Path;
+use scopeguard::guard;
 use async_std::{
     // TODO use async_channel instead of unstable+slower
     sync::{
@@ -17,7 +18,7 @@ use async_std::{
     task,
 };
 
-use rustybot::command_tree::CommandTree;
+use rustybot::command_tree::{CommandTree, CmdValue};
 
 enum Command {
     Stop,
@@ -76,6 +77,7 @@ struct IRCBotClient {
     reader: BufReader::<TcpStream>,
     sender: Sender::<String>,
     channel: String,
+    ct: CommandTree,
 }
 
 struct IRCBotMessageSender {
@@ -102,7 +104,7 @@ impl IRCBotMessageSender {
 }
 
 impl IRCBotClient {
-    async fn connect(nick: String, secret: String, channel: String) -> (IRCBotClient, IRCBotMessageSender) {
+    async fn connect(nick: String, secret: String, channel: String, ct: CommandTree) -> (IRCBotClient, IRCBotMessageSender) {
         // Creates the stream object that will go into the client.
         let stream = TcpStream::connect("irc.chat.twitch.tv:6667").await.unwrap();
         // Get a stream reference to use for reading.
@@ -114,7 +116,8 @@ impl IRCBotClient {
             secret: secret,
             reader: reader,
             sender: s,
-            channel: channel
+            channel: channel,
+            ct: ct
         }, IRCBotMessageSender {
             writer: stream,
             queue: r,
@@ -151,18 +154,36 @@ impl IRCBotClient {
     }
 
     async fn do_command(&mut self, user: String, cmd: String) -> Command {
-        println!("[Parsed Command] Name: {} | Command: '{}'", user, cmd);
-        if user == "desktopfolder" && cmd.starts_with("Stop") { return Command::Stop; }
-
-        // Ideally, load a tree from JSON or similar
-        if cmd == "bnb" { 
-            self.privmsg("Brand new bot!".to_string()).await; 
-            Command::Continue
+        let format_str = format!("[Name({}),Command({})] Result: ", user, cmd);
+        let mut result = "Command was invalid, disallowed, or skipped.".to_string();
+        let _guard = scopeguard::guard((), |&format_str, &result| {
+            println!("{}{}", format_str, result);
+        });
+        let node = match self.ct.find(&cmd) {
+            Some(x) => x,
+            None => return Command::Continue // Not a valid command
+        };
+        if node.admin_only && user != "desktopfolder" {
+            self.privmsg("Naughty naughty, that's not for you!".to_string()).await;
+            return Command::Continue;
         }
-        else if user == "desktopfolder" {
-            self.do_elevated(cmd).await
+        let cmd = match &node.value {
+            CmdValue::StringResponse(x) => {
+                self.privmsg(x.clone()).await;
+                return Command::Continue;
+            },
+            CmdValue::Alias(x) => {
+                println!("Wow, {} is an alias!", x);
+                return Command::Continue;
+            },
+            CmdValue::Generic(x) => x
+        };
+        match cmd.as_str() {
+            "meta:help" => self.privmsg("No help for you, good sir!".to_string()).await,
+            "meta:stop" => return Command::Stop,
+            _ => return Command::Continue
         }
-        else { Command::Continue }
+        Command::Continue
     }
 
     async fn handle_twitch(&mut self, line: &String) -> Command {
@@ -223,8 +244,12 @@ async fn async_main() {
 
     println!("Nick: {} | Secret: {} | Channel: {}", nick, secret, channel);
 
-    let (mut client, mut forwarder) = IRCBotClient::connect(nick, secret, channel).await;
+    // Supported commands, loaded from JSON.
+    let ct = CommandTree::from_json_file(Path::new("commands.json"));
+    //ct.dump_file(Path::new("commands.parsed.json"));
+    let (mut client, mut forwarder) = IRCBotClient::connect(nick, secret, channel, ct).await;
     client.authenticate().await;
+
 
     select! {
         return_message = client.launch_read().fuse() => match return_message {
@@ -236,7 +261,5 @@ async fn async_main() {
 }
 
 fn main() {
-    let ct = CommandTree::from_json_file(Path::new("commands.json"));
-    ct.dump_file(Path::new("commands.parsed.json"));
-    //task::block_on(async_main()) 
+    task::block_on(async_main()) 
 }

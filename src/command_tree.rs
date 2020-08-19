@@ -1,9 +1,7 @@
-use std::fmt;
 use std::fs::File;
 use std::io::Read;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
-use serde_json::*;
 use serde::{Serialize, Deserialize};
 
 /* CommandTree - A (strange) tree implementation.
@@ -29,6 +27,8 @@ use serde::{Serialize, Deserialize};
 fn get_true_lol() -> bool { true }
 fn get_false_lol() -> bool { false }
 fn default_ver() -> String { "0.0.0".to_string() }
+fn default_host() -> String { "irc.chat.twitch.tv".to_string() }
+fn default_port() -> String { "6667".to_string() }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub enum CmdValue {
@@ -42,13 +42,13 @@ pub enum CmdValue {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct CommandNode {
-    value: CmdValue,
+    pub value: CmdValue,
     #[serde(default = "get_false_lol")]
-    admin_only: bool,
+    pub admin_only: bool,
     #[serde(default = "HashMap::new")]
-    subcommands: HashMap<String, CommandNode>,
+    pub subcommands: HashMap<String, CommandNode>,
     #[serde(default = "get_false_lol")]
-    hidden: bool,
+    pub hidden: bool,
 }
 
 impl CommandNode {
@@ -65,17 +65,21 @@ impl CommandNode {
 pub struct CommandTree {
     #[serde(default = "default_ver")]
     version: String,
+    #[serde(default = "default_host")]
+    host: String,
+    #[serde(default = "default_port")]
+    port: String,
     #[serde(default = "HashMap::new")]
     commands: HashMap<String, CommandNode>,
 }
 
 impl CommandTree {
     pub fn find(&self, key: &String) -> Option<&CommandNode> {
-        match self.commands.get(key) {
+        match self.commands.get(&key.to_lowercase()) {
             Some(node) => match &node.value {
                 CmdValue::Alias(k) => {
                     let mut h = HashSet::new();
-                    h.insert(key);
+                    h.insert(key.clone());
                     self.find_recurse(&k, h)
                 },
                 _ => Some(node)
@@ -84,11 +88,11 @@ impl CommandTree {
         }
     }
 
-    pub fn find_recurse(&self, key: &String, mut prev: HashSet<&String>) -> Option<&CommandNode> {
+    pub fn find_recurse(&self, key: &String, mut prev: HashSet<String>) -> Option<&CommandNode> {
         match self.commands.get(key) {
             Some(node) => match &node.value {
                 CmdValue::Alias(k) => {
-                    if prev.insert(k) { self.find_recurse(&k, prev) }
+                    if prev.insert(k.clone()) { self.find_recurse(&k, prev) }
                     else { None }
                 }
                 _ => Some(node)
@@ -98,7 +102,7 @@ impl CommandTree {
     }
 
     pub fn validate(ct: &CommandTree) -> bool {
-        for (key, value) in &ct.commands {
+        for (key, _value) in &ct.commands {
             for c in key.chars() {
                 if c.is_uppercase() {
                     return false
@@ -129,7 +133,12 @@ impl CommandTree {
             // only overwrites though. not a big deal.
             true => panic!("Cannot setup new command tree; path already exists!"),
             false => {
-                let mut ct = CommandTree { commands: HashMap::new(), version: default_ver() };
+                let mut ct = CommandTree { 
+                    commands: HashMap::new(),
+                    version: default_ver(),
+                    port: default_port(),
+                    host: default_host() 
+                };
                 ct.commands.insert("json".to_string(), 
                                    CommandNode::new_easter(
                                        CmdValue::StringResponse("The truth is alterable. The truth never has been altered. JSON is the best data format. JSON has always been the best data format.".to_string())));
