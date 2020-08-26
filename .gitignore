@@ -8,3 +8,4 @@ test.json
 commands.json
 commands.parsed.json
 src/stt
+log-*

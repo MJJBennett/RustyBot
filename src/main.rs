@@ -156,8 +156,8 @@ impl IRCBotClient {
     async fn do_command(&mut self, user: String, cmd: String) -> Command {
         let format_str = format!("[Name({}),Command({})] Result: ", user, cmd);
         let mut result = "Command was invalid, disallowed, or skipped.".to_string();
-        let _guard = scopeguard::guard((), |&format_str, &result| {
-            println!("{}{}", format_str, result);
+        let _guard = scopeguard::guard((), |()| {
+            println!("{}{}", &format_str, &result);
         });
         let node = match self.ct.find(&cmd) {
             Some(x) => x,
