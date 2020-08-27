@@ -57,7 +57,7 @@ impl TwitchFmt {
         IRCMessage(format!("NICK {}\r\n", nick))
     }
     fn join(join: &String) -> IRCMessage {
-        IRCMessage(format!("JOIN {}\r\n", join))
+        IRCMessage(format!("JOIN #{}\r\n", join))
     }
     fn text(text: &String) -> IRCMessage {
         IRCMessage(format!("{}\r\n", text))
