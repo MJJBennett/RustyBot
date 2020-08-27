@@ -10,7 +10,6 @@ use async_trait::async_trait;
 use futures::{select, FutureExt};
 use lazy_static::lazy_static;
 use regex::Regex;
-use scopeguard::guard;
 use std::io::Result;
 use std::path::Path;
 use std::time::Duration;
@@ -20,12 +19,6 @@ use rustybot::command_tree::{CmdValue, CommandTree};
 enum Command {
     Stop,
     Continue,
-}
-
-// Actually totally unrelated to the above...
-enum CommandType {
-    Raw,
-    PrivMsg,
 }
 
 // Temporary until I find the correct way to do this.
@@ -39,31 +32,44 @@ impl CaptureExt for regex::Captures<'_> {
     }
 }
 
+struct IRCMessage(String);
+
 #[async_trait]
 trait IRCStream {
-    async fn send_pass(&mut self, pass: &String) -> ();
-    async fn send_nick(&mut self, nick: &String) -> ();
-    async fn send_join(&mut self, join: &String) -> ();
-    async fn send(&mut self, to_send: String) -> ();
+    async fn send(&mut self, text: IRCMessage) -> ();
 }
 
 #[async_trait]
 impl IRCStream for TcpStream {
-    // This trait is probably a little unwieldy, but... so cool!
-    async fn send_pass(&mut self, pass: &String) {
-        self.send(format!("PASS {}", pass)).await;
+    async fn send(&mut self, text: IRCMessage) {
+        println!("Sending: '{}'", text.0);
+        let _ = self.write(text.0.as_bytes()).await;
     }
+}
 
-    async fn send_nick(&mut self, nick: &String) {
-        self.send(format!("NICK {}", nick)).await;
+struct TwitchFmt {}
+
+impl TwitchFmt {
+    fn pass(pass: &String) -> IRCMessage {
+        IRCMessage(format!("PASS {}\r\n", pass))
     }
-
-    async fn send_join(&mut self, to_join: &String) {
-        self.send(format!("JOIN #{}", to_join)).await;
+    fn nick(nick: &String) -> IRCMessage {
+        IRCMessage(format!("NICK {}\r\n", nick))
     }
-
-    async fn send(&mut self, to_send: String) {
-        let _ = self.write(format!("{}\r\n", to_send).as_bytes()).await;
+    fn join(join: &String) -> IRCMessage {
+        IRCMessage(format!("JOIN {}\r\n", join))
+    }
+    fn text(text: &String) -> IRCMessage {
+        IRCMessage(format!("{}\r\n", text))
+    }
+    fn privmsg(text: &String, channel: &String) -> IRCMessage {
+        IRCMessage(format!("PRIVMSG #{} :{}\r\n", channel, text))
+    }
+    fn pong() -> IRCMessage {
+        IRCMessage("PONG :tmi.twitch.tv\r\n".to_string())
+    }
+    fn raw(data: &String) -> IRCMessage {
+        IRCMessage(format!("{}\r\n", data))
     }
 }
 
@@ -72,14 +78,15 @@ struct IRCBotClient {
     nick: String,
     secret: String,
     reader: BufReader<TcpStream>,
-    sender: Sender<String>,
+    sender: Sender<IRCMessage>,
     channel: String,
     ct: CommandTree,
 }
 
+// Class that receives messages, then sends them.
 struct IRCBotMessageSender {
     writer: TcpStream,
-    queue: Receiver<String>,
+    queue: Receiver<IRCMessage>,
 }
 
 impl IRCBotMessageSender {
@@ -87,7 +94,6 @@ impl IRCBotMessageSender {
         loop {
             match self.queue.recv().await {
                 Ok(s) => {
-                    println!("Sending: '{}'", s);
                     self.writer.send(s).await;
                 }
                 Err(e) => {
@@ -131,28 +137,16 @@ impl IRCBotClient {
         // receiver + the tcpstream clone
     }
 
-    fn format_twitch(&self, m: String, t: CommandType) -> String {
-        match t {
-            CommandType::Raw => m,
-            CommandType::PrivMsg => format!("PRIVMSG #{} :{}", self.channel, m),
-        }
-    }
-
     async fn authenticate(&mut self) -> () {
         println!("Writing password...");
-        self.stream.send_pass(&self.secret).await;
+        self.stream.send(TwitchFmt::pass(&self.secret)).await;
         println!("Writing nickname...");
-        self.stream.send_nick(&self.nick).await;
+        self.stream.send(TwitchFmt::nick(&self.nick)).await;
         println!("Writing join command...");
-        self.stream.send_join(&self.channel).await;
+        self.stream.send(TwitchFmt::join(&self.channel)).await;
     }
 
-    async fn privmsg(&mut self, m: String) -> () {
-        self.sender
-            .send(self.format_twitch(m, CommandType::PrivMsg))
-            .await;
-    }
-
+    /*
     async fn do_elevated(&mut self, mut cmd: String) -> Command {
         if cmd.starts_with("stop") {
             Command::Stop
@@ -166,38 +160,65 @@ impl IRCBotClient {
             Command::Continue
         }
     }
+    */
 
     async fn do_command(&mut self, user: String, cmd: String) -> Command {
         let format_str = format!("[Name({}),Command({})] Result: ", user, cmd);
-        let mut result = "Command was invalid, disallowed, or skipped.".to_string();
-        let _guard = scopeguard::guard((), |()| {
-            println!("{}{}", &format_str, &result);
-        });
+        let log_res = |s| println!("{}{}", format_str, s);
+
         let node = match self.ct.find(&cmd) {
             Some(x) => x,
-            None => return Command::Continue, // Not a valid command
+            None => {
+                log_res("Skipped as no match was found.");
+                return Command::Continue; // Not a valid command
+            }
         };
         if node.admin_only && user != "desktopfolder" {
-            self.privmsg("Naughty naughty, that's not for you!".to_string())
+            self.sender
+                .send(TwitchFmt::privmsg(
+                    &"Naughty naughty, that's not for you!".to_string(),
+                    &self.channel,
+                ))
                 .await;
+            log_res("Blocked as user is not bot administrator.");
             return Command::Continue;
         }
         let cmd = match &node.value {
             CmdValue::StringResponse(x) => {
-                self.privmsg(x.clone()).await;
+                self.sender
+                    .send(TwitchFmt::privmsg(&x.clone(), &self.channel))
+                    .await;
+                log_res(format!("Returned a string response ({}).", x).as_str());
                 return Command::Continue;
             }
             CmdValue::Alias(x) => {
-                println!("Wow, {} is an alias!", x);
+                log_res(format!("! Didn't return an alias ({}).", x).as_str());
                 return Command::Continue;
             }
             CmdValue::Generic(x) => x,
         };
         match cmd.as_str() {
-            "meta:help" => self.privmsg("No help for you, good sir!".to_string()).await,
-            "meta:stop" => return Command::Stop,
-            _ => return Command::Continue,
+            "meta:help" => {
+                self.sender
+                    .send(TwitchFmt::privmsg(
+                        &"No help for you, good sir!".to_string(),
+                        &self.channel,
+                    ))
+                    .await
+            }
+            "meta:stop" => {
+                log_res("Stopped as requested by command.");
+                return Command::Stop;
+            }
+            "meta:say" => {
+                log_res("Said something?");
+            }
+            _ => {
+                log_res("! Not yet equipped to handle this command.");
+                return Command::Continue;
+            }
         }
+        log_res("Successfully executed command.");
         Command::Continue
     }
 
@@ -205,7 +226,7 @@ impl IRCBotClient {
         match line.trim() {
             "" => Command::Stop,
             "PING :tmi.twitch.tv" => {
-                self.sender.send("PONG :tmi.twitch.tv".to_string()).await;
+                self.sender.send(TwitchFmt::pong()).await;
                 Command::Continue
             }
             _ => Command::Continue,
