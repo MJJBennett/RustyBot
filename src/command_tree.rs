@@ -74,15 +74,45 @@ pub struct CommandTree {
 }
 
 impl CommandTree {
-    pub fn find(&self, key: &String) -> Option<&CommandNode> {
-        match self.commands.get(&key.to_lowercase()) {
+    pub fn find_subcommands<'a>(&self, itr: &mut std::str::Split<char>, node: &'a CommandNode) -> &'a CommandNode {
+        node
+    }
+
+    pub fn find(&self, key: &mut String) -> Option<&CommandNode> {
+        /* key is the full command string. For example:
+         * "say hello, friends"
+         * "wiw --start --timeout=20s functional!"
+         * Therefore, we use itr as an iterator to the string,
+         * which essentially returns sequential commands.
+         */
+        let mut itr = key.as_str().split(' ');
+        let cmd = match itr.next() {
+            Some(s) => s,
+            None => return None
+        };
+        /* after we're done, we do itr.collect::<Vec<String>>().join(' ') */
+        match self.commands.get(&cmd.to_lowercase()) {
             Some(node) => match &node.value {
                 CmdValue::Alias(k) => {
                     let mut h = HashSet::new();
                     h.insert(key.clone());
-                    self.find_recurse(&k, h)
+                    if let Some(res) = self.find_recurse(&k, h) {
+                        // we have a mapping - res
+                        // I've decided: No aliases for subcommands.
+                        // In theory they support it, but I refuse to actually allow it.
+                        let ret = Some(self.find_subcommands(&mut itr, res));
+                        *key = String::from(itr.collect::<Vec<&str>>().join(" "));
+                        ret
+                    }
+                    else {
+                        None
+                    }
                 },
-                _ => Some(node)
+                _ => {
+                    let ret = Some(self.find_subcommands(&mut itr, node));
+                    *key = String::from(itr.into_iter().collect::<Vec<&str>>().join(" "));
+                    ret
+                }
             },
             None => None
         }

@@ -68,9 +68,6 @@ impl TwitchFmt {
     fn pong() -> IRCMessage {
         IRCMessage("PONG :tmi.twitch.tv\r\n".to_string())
     }
-    fn raw(data: &String) -> IRCMessage {
-        IRCMessage(format!("{}\r\n", data))
-    }
 }
 
 struct IRCBotClient {
@@ -162,11 +159,11 @@ impl IRCBotClient {
     }
     */
 
-    async fn do_command(&mut self, user: String, cmd: String) -> Command {
+    async fn do_command(&mut self, user: String, mut cmd: String) -> Command {
         let format_str = format!("[Name({}),Command({})] Result: ", user, cmd);
         let log_res = |s| println!("{}{}", format_str, s);
 
-        let node = match self.ct.find(&cmd) {
+        let node = match self.ct.find(&mut cmd) {
             Some(x) => x,
             None => {
                 log_res("Skipped as no match was found.");
@@ -207,7 +204,7 @@ impl IRCBotClient {
                     .await
             }
             "meta:stop" => {
-                log_res("Stopped as requested by command.");
+                log_res("Stopping as requested by command.");
                 return Command::Stop;
             }
             "meta:say" => {
