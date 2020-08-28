@@ -42,7 +42,7 @@ trait IRCStream {
 #[async_trait]
 impl IRCStream for TcpStream {
     async fn send(&mut self, text: IRCMessage) {
-        println!("Sending: '{}'", text.0);
+        println!("Sending: '{}'", text.0.trim());
         let _ = self.write(text.0.as_bytes()).await;
     }
 }
@@ -170,6 +170,8 @@ impl IRCBotClient {
                 return Command::Continue; // Not a valid command
             }
         };
+        let args = cmd;
+        println!("Command being returned -> '{}'", args);
         if node.admin_only && user != "desktopfolder" {
             self.sender
                 .send(TwitchFmt::privmsg(
@@ -180,7 +182,7 @@ impl IRCBotClient {
             log_res("Blocked as user is not bot administrator.");
             return Command::Continue;
         }
-        let cmd = match &node.value {
+        let command = match &node.value {
             CmdValue::StringResponse(x) => {
                 self.sender
                     .send(TwitchFmt::privmsg(&x.clone(), &self.channel))
@@ -194,7 +196,7 @@ impl IRCBotClient {
             }
             CmdValue::Generic(x) => x,
         };
-        match cmd.as_str() {
+        match command.as_str() {
             "meta:help" => {
                 self.sender
                     .send(TwitchFmt::privmsg(
@@ -208,7 +210,12 @@ impl IRCBotClient {
                 return Command::Stop;
             }
             "meta:say" => {
-                log_res("Said something?");
+                log_res("Sent a privmsg.");
+                self.sender.send(TwitchFmt::privmsg(&args, &self.channel)).await;
+            }
+            "meta:say_raw" => {
+                log_res("Send a raw message.");
+                self.sender.send(TwitchFmt::text(&args)).await;
             }
             _ => {
                 log_res("! Not yet equipped to handle this command.");

@@ -3,6 +3,8 @@ use std::io::Read;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use serde::{Serialize, Deserialize};
+use std::iter::Peekable;
+use std::str::Split;
 
 /* CommandTree - A (strange) tree implementation.
  *
@@ -47,6 +49,7 @@ pub struct CommandNode {
     pub admin_only: bool,
     #[serde(default = "HashMap::new")]
     pub subcommands: HashMap<String, CommandNode>,
+    // Anything with admin marked as true is auto-hidden
     #[serde(default = "get_false_lol")]
     pub hidden: bool,
 }
@@ -74,8 +77,26 @@ pub struct CommandTree {
 }
 
 impl CommandTree {
-    pub fn find_subcommands<'a>(&self, itr: &mut std::str::Split<char>, node: &'a CommandNode) -> &'a CommandNode {
-        node
+    pub fn find_subcommands<'a>(&self, itr: &mut Peekable<Split<char>>, node: &'a CommandNode) -> &'a CommandNode {
+        // Now we find subcommands!
+        match itr.peek() {
+            Some(s) => {
+                if *s == "--" {
+                    let _ = itr.next();
+                    return node;
+                }
+                let x: &[_] = &['-', '\n', '\r'];
+                let sc = String::from(*(&s.trim_matches(x)));
+                match node.subcommands.get(&sc) {
+                    Some(n) => {
+                        let _ = itr.next();
+                        self.find_subcommands(itr, n)
+                    }
+                    None => node
+                }
+            }
+            None => node
+        }
     }
 
     pub fn find(&self, key: &mut String) -> Option<&CommandNode> {
@@ -85,7 +106,7 @@ impl CommandTree {
          * Therefore, we use itr as an iterator to the string,
          * which essentially returns sequential commands.
          */
-        let mut itr = key.as_str().split(' ');
+        let mut itr = key.as_str().split(' ').peekable();
         let cmd = match itr.next() {
             Some(s) => s,
             None => return None
