@@ -3,7 +3,8 @@
 import json
 
 with open("commands.json", 'r') as file:
-    d = json.read(file)
+    full = json.load(file)
+d = full["commands"]
 
 """
 "bnb": {
@@ -20,7 +21,9 @@ def to_bool(string):
     return string != '' and (string.lower()[0] in ['y', 't', '1'])
 
 while True:
-    name = input('command name: ').strip()
+    name = input('command name: ').strip().lower()
+    if name == '':
+        break
     if name in d:
         print('already done')
         continue
@@ -38,14 +41,23 @@ while True:
             continue
         q["value"] = {"Generic": resp}
 
-    q["admin_only"] = to_bool(input("admin only? y for true, otherwise false: ").strip())
-    q["hidden"] = to_bool(input("hidden? y for true, otherwise false: ").strip())
+    if to_bool(input("admin only? y for true, otherwise false: ").strip()):
+        q["admin_only"] = True
+    if to_bool(input("hidden? y for true, otherwise false: ").strip()):
+        q["hidden"] = True
 
-    d[name] == q
+    d[name] = q
 
-    if input('empty to go again: ').strip() != '':
-        break
+for k in d:
+    if "admin_only" in d[k]:
+        if d[k]["admin_only"] == False:
+            del d[k]["admin_only"]
+    if "hidden" in d[k]:
+        if d[k]["hidden"] == False:
+            del d[k]["hidden"]
+
+full["commands"] = d
 
 print('committing to file')
-with open('commands.json', 'w') as file:
-    json.dump(d, file, indent=4)
+with open('commands.json', 'w', encoding='utf-8') as file:
+    json.dump(full, file, indent=2, ensure_ascii=False)

@@ -9,3 +9,6 @@ src/stt
 log-*
 *.bk
 commands.*
+*dump.json
+players.*
+test*

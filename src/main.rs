@@ -15,6 +15,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use rustybot::command_tree::{CmdValue, CommandTree};
+use rustybot::game::Game;
 
 enum Command {
     Stop,
@@ -78,6 +79,7 @@ struct IRCBotClient {
     sender: Sender<IRCMessage>,
     channel: String,
     ct: CommandTree,
+    game: Game,
 }
 
 // Class that receives messages, then sends them.
@@ -124,6 +126,7 @@ impl IRCBotClient {
                 sender: s,
                 channel: channel,
                 ct: ct,
+                game: Game::new()
             },
             IRCBotMessageSender {
                 writer: stream,
@@ -171,7 +174,7 @@ impl IRCBotClient {
             }
         };
         let args = cmd;
-        println!("Command being returned -> '{}'", args);
+        println!("Arguments being returned -> '{}'", args);
         if node.admin_only && user != "desktopfolder" {
             self.sender
                 .send(TwitchFmt::privmsg(
@@ -216,6 +219,41 @@ impl IRCBotClient {
             "meta:say_raw" => {
                 log_res("Send a raw message.");
                 self.sender.send(TwitchFmt::text(&args)).await;
+            }
+            "game:bet_for" => {
+                log_res("Bet that it works!");
+                match self.game.bet_for(&user, &args) {
+                    Err(e) => self.sender.send(TwitchFmt::privmsg(&e, &self.channel)).await,
+                    _ => {}
+                }
+            }
+            "game:bet_against" => {
+                log_res("Bet that it fails!");
+                match self.game.bet_against(&user, &args) {
+                    Err(e) => self.sender.send(TwitchFmt::privmsg(&e, &self.channel)).await,
+                    _ => {}
+                }
+            }
+            "game:failed" => {
+                log_res("Noted that it failed.");
+                self.sender.send(TwitchFmt::privmsg(&self.game.failed(), &self.channel)).await;
+            }
+            "game:worked" => {
+                log_res("Noted that it succeeded!");
+                self.sender.send(TwitchFmt::privmsg(&self.game.worked(), &self.channel)).await;
+            }
+            "game:status" => {
+                log_res("Returned a player's status.");
+                let query = if args == "" { &user } else { &args };
+                self.sender.send(TwitchFmt::privmsg(&self.game.status(query), &self.channel)).await;
+            }
+            "game:reload" => {
+                log_res("Reloaded the game.");
+                self.game.reload();
+            }
+            "game:save" => {
+                log_res("Saved the game.");
+                self.game.save();
             }
             _ => {
                 log_res("! Not yet equipped to handle this command.");
