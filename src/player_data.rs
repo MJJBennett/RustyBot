@@ -32,12 +32,14 @@ pub struct Player {
     pub losses: i64,
 }
 
-pub fn new(name: String) -> Player {
-    Player {
-        name: name,
-        cash: default_cash(),
-        wins: 0,
-        losses: 0,
+impl Player {
+    pub fn new(name: String) -> Player {
+        Player {
+            name: name,
+            cash: default_cash(),
+            wins: 0,
+            losses: 0,
+        }
     }
 }
 

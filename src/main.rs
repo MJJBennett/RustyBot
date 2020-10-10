@@ -17,11 +17,6 @@ use std::time::Duration;
 use rustybot::command_tree::{CmdValue, CommandTree};
 use rustybot::game::Game;
 
-enum Command {
-    Stop,
-    Continue,
-}
-
 // Temporary until I find the correct way to do this.
 trait CaptureExt {
     fn str_at(&self, i: usize) -> String;
@@ -31,6 +26,31 @@ impl CaptureExt for regex::Captures<'_> {
     fn str_at(&self, i: usize) -> String {
         self.get(i).unwrap().as_str().to_string()
     }
+}
+
+// Message filtering
+enum FilterResult {
+    Skip,
+    Ban(String),
+    Empty,
+}
+
+fn filter(_name: &String, message: &String) -> FilterResult {
+    lazy_static! {
+        static ref SPAM_RE_1: Regex =
+            Regex::new(r"follower.{0,15}prime.{0,15}view.{0,25}bigfollows.{0,10}com").unwrap();
+    }
+
+    match SPAM_RE_1.captures(message.as_str()) {
+        // TODO Use re search or something, this is offline code
+        Some(_) => FilterResult::Ban(String::from("Your message has been marked as spam. To be unbanned, send a private message to DesktopFolder.")),
+        _ => FilterResult::Empty,
+    }
+}
+
+enum Command {
+    Stop,
+    Continue,
 }
 
 struct IRCMessage(String);
@@ -80,6 +100,7 @@ struct IRCBotClient {
     channel: String,
     ct: CommandTree,
     game: Game,
+    autosave: bool,
 }
 
 // Class that receives messages, then sends them.
@@ -126,7 +147,8 @@ impl IRCBotClient {
                 sender: s,
                 channel: channel,
                 ct: ct,
-                game: Game::new()
+                game: Game::new(),
+                autosave: false,
             },
             IRCBotMessageSender {
                 writer: stream,
@@ -197,7 +219,13 @@ impl IRCBotClient {
                 log_res(format!("! Didn't return an alias ({}).", x).as_str());
                 return Command::Continue;
             }
-            CmdValue::Generic(x) => x,
+            CmdValue::Generic(x) => {
+                if x.as_str() == "debug:use_internal_mapping" {
+                    &args
+                } else {
+                    x
+                }
+            }
         };
         match command.as_str() {
             "meta:help" => {
@@ -214,38 +242,66 @@ impl IRCBotClient {
             }
             "meta:say" => {
                 log_res("Sent a privmsg.");
-                self.sender.send(TwitchFmt::privmsg(&args, &self.channel)).await;
+                self.sender
+                    .send(TwitchFmt::privmsg(&args, &self.channel))
+                    .await;
             }
             "meta:say_raw" => {
                 log_res("Send a raw message.");
                 self.sender.send(TwitchFmt::text(&args)).await;
             }
+            "meta:reload_commands" => {
+                log_res("Reloaded commands from file.");
+                self.ct = CommandTree::from_json_file(Path::new("commands.json"));
+            }
             "game:bet_for" => {
                 log_res("Bet that it works!");
                 match self.game.bet_for(&user, &args) {
-                    Err(e) => self.sender.send(TwitchFmt::privmsg(&e, &self.channel)).await,
+                    Err(e) => {
+                        self.sender
+                            .send(TwitchFmt::privmsg(&e, &self.channel))
+                            .await
+                    }
                     _ => {}
                 }
             }
             "game:bet_against" => {
                 log_res("Bet that it fails!");
                 match self.game.bet_against(&user, &args) {
-                    Err(e) => self.sender.send(TwitchFmt::privmsg(&e, &self.channel)).await,
+                    Err(e) => {
+                        self.sender
+                            .send(TwitchFmt::privmsg(&e, &self.channel))
+                            .await
+                    }
                     _ => {}
                 }
             }
             "game:failed" => {
                 log_res("Noted that it failed.");
-                self.sender.send(TwitchFmt::privmsg(&self.game.failed(), &self.channel)).await;
+                self.sender
+                    .send(TwitchFmt::privmsg(&self.game.failed(), &self.channel))
+                    .await;
+                if self.autosave {
+                    self.game.save(); // Note: This should really be done in Game's code, 
+                    // this is just a rushed impl
+                }
             }
             "game:worked" => {
                 log_res("Noted that it succeeded!");
-                self.sender.send(TwitchFmt::privmsg(&self.game.worked(), &self.channel)).await;
+                self.sender
+                    .send(TwitchFmt::privmsg(&self.game.worked(), &self.channel))
+                    .await;
+                if self.autosave {
+                    self.game.save(); // Note: This should really be done in Game's code, 
+                    // this is just a rushed impl
+                }
             }
             "game:status" => {
                 log_res("Returned a player's status.");
                 let query = if args == "" { &user } else { &args };
-                self.sender.send(TwitchFmt::privmsg(&self.game.status(query), &self.channel)).await;
+                self.sender
+                    .send(TwitchFmt::privmsg(&self.game.status(query), &self.channel))
+                    .await;
             }
             "game:reload" => {
                 log_res("Reloaded the game.");
@@ -255,6 +311,10 @@ impl IRCBotClient {
                 log_res("Saved the game.");
                 self.game.save();
             }
+            "game:autosave" => {
+                log_res("Turned on autosave.");
+                self.autosave = true;
+            }
             _ => {
                 log_res("! Not yet equipped to handle this command.");
                 return Command::Continue;
@@ -262,6 +322,12 @@ impl IRCBotClient {
         }
         log_res("Successfully executed command.");
         Command::Continue
+    }
+
+    async fn ban(&mut self, name: &String, reason: &String) {
+        self.sender
+            .send(TwitchFmt::privmsg(&format!("/ban {} {}", name, reason), &self.channel))
+            .await;
     }
 
     async fn handle_twitch(&mut self, line: &String) -> Command {
@@ -277,10 +343,9 @@ impl IRCBotClient {
 
     async fn launch_read(&mut self) -> Result<String> {
         lazy_static! {
-            static ref PRIV_RE: Regex = Regex::new(
-                r":(\w*)!\w*@\w*\.tmi\.twitch\.tv PRIVMSG #\w* :\s*(bot |!|~)\s*(.+?)\s*$"
-            )
-            .unwrap();
+            static ref COMMAND_RE: Regex = Regex::new(r"^(bot |!|~)\s*(.+?)\s*$").unwrap();
+            static ref PRIV_RE: Regex =
+                Regex::new(r":(\w*)!\w*@\w*\.tmi\.twitch\.tv PRIVMSG #\w* :\s*(.*)").unwrap();
         }
         let mut line = String::new();
 
@@ -289,14 +354,32 @@ impl IRCBotClient {
             match self.reader.read_line(&mut line).await {
                 Ok(_) => {
                     println!("[Received] Message: '{}'", line.trim());
-                    let (name, command) = match PRIV_RE.captures(line.as_str()) {
+
+                    // First, parse if it's a private message, or a skip/ping/etc.
+                    let (name, message) = match PRIV_RE.captures(line.as_str()) {
                         // there must be a better way...
-                        Some(caps) => (caps.str_at(1), caps.str_at(3)),
+                        Some(caps) => (caps.str_at(1), caps.str_at(2)),
                         None => match self.handle_twitch(&line).await {
                             Command::Stop => return Ok("Stopped due to twitch.".to_string()),
                             _ => continue,
                         },
                     };
+
+                    // Now we filter based on the username & the message sent.
+                    match filter(&name, &message) {
+                        FilterResult::Skip => continue,
+                        FilterResult::Ban(reason) => self.ban(&name, &reason).await,
+                        _ => {}
+                    }
+
+                    // Now, we parse the command out of the message.
+                    let command = match COMMAND_RE.captures(message.as_str()) {
+                        // there must be a better way...
+                        Some(caps) => caps.str_at(2),
+                        None => continue,
+                    };
+
+                    // Finally, we actually take the command and maybe take action.
                     if let Command::Stop = self.do_command(name, command).await {
                         return Ok("Received stop command.".to_string());
                     }

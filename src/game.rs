@@ -1,7 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::Read;
 use std::path::Path;
 
 use crate::player_data::*;
@@ -58,7 +57,7 @@ impl Game {
     pub fn status(&self, name: &String) -> String {
         match self.players.get(name) {
             Some(p) => Game::summarize(p),
-            None => format!("The player '{}' does not exist.", name),
+            None => format!("The player '{}' does not exist; place a wager to join!", name),
         }
     }
 
@@ -70,7 +69,7 @@ impl Game {
         self.players = get_players(&PLAYER_PATH);
     }
 
-    pub fn valid_wager(&self, wager: &String, user: &String) -> Result<i64, String> {
+    pub fn valid_wager(&mut self, wager: &String, user: &String) -> Result<i64, String> {
         // Is it a valid number?
         if let Ok(w) = wager.parse::<i64>() {
             // Is it greater than 4?
@@ -80,17 +79,12 @@ impl Game {
                 ));
             }
             // Is it a valid player?
-            match self.players.get(user) {
-                Some(p) => {
-                    // Does the player have enough to wager?
-                    if p.cash < w {
-                        return Err(format!(
-                            "The player '{}' has insufficient funds to make that bet! ({})",
-                            user, w
-                        ));
-                    }
-                }
-                None => return Err(format!("The player '{}' does not exist!", user)),
+            let player = self.players.entry(user.clone()).or_insert(Player::new(user.clone()));
+            if player.cash < w {
+                return Err(format!(
+                    "The player '{}' has insufficient funds to make that bet! ({})",
+                    user, w
+                ));
             }
             // Does the player already have a wager?
             match self.wagers.get(user) {
@@ -106,7 +100,7 @@ impl Game {
         // This function is only called if the wager is valid.
         // Could use typesafety to ensure that, but it doesn't prevent
         // bad use, so this function is private.
-        self.players.get_mut(user).unwrap().cash += amount.abs();
+        self.players.get_mut(user).unwrap().cash -= amount.abs();
         self.wagers.insert(user.clone(), amount);
     }
 
