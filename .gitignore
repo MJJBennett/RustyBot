@@ -12,3 +12,4 @@ commands.*
 *dump.json
 players.*
 test*
+*.ignore
