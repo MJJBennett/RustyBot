@@ -16,6 +16,7 @@ use std::time::Duration;
 
 use rustybot::command_tree::{CmdValue, CommandTree};
 use rustybot::game::Game;
+use rustybot::audio::Audio;
 
 // Temporary until I find the correct way to do this.
 trait CaptureExt {
@@ -100,6 +101,7 @@ struct IRCBotClient {
     channel: String,
     ct: CommandTree,
     game: Game,
+    audio: Audio,
     autosave: bool,
 }
 
@@ -148,6 +150,7 @@ impl IRCBotClient {
                 channel: channel,
                 ct: ct,
                 game: Game::new(),
+                audio: Audio::new(),
                 autosave: false,
             },
             IRCBotMessageSender {
@@ -314,6 +317,10 @@ impl IRCBotClient {
             "game:autosave" => {
                 log_res("Turned on autosave.");
                 self.autosave = true;
+            }
+            "core:play_audio" => {
+                log_res("Tested audio.");
+                self.audio.play();
             }
             _ => {
                 log_res("! Not yet equipped to handle this command.");
