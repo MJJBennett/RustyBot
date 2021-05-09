@@ -216,6 +216,9 @@ impl IRCBotClient {
                     .send(TwitchFmt::privmsg(&x.clone(), &self.channel))
                     .await;
                 log_res(format!("Returned a string response ({}).", x).as_str());
+                if !node.sound.is_empty() {
+                    self.audio.play_file(&node.sound)
+                };
                 return Command::Continue;
             }
             CmdValue::Alias(x) => {

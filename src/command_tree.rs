@@ -52,15 +52,17 @@ pub struct CommandNode {
     // Anything with admin marked as true is auto-hidden
     #[serde(default = "get_false_lol")]
     pub hidden: bool,
+    #[serde(default = "String::new")]
+    pub sound: String,
 }
 
 impl CommandNode {
     pub fn new(value: CmdValue) -> CommandNode {
-        CommandNode { value: value, admin_only: false, subcommands: HashMap::new(), hidden: false }
+        CommandNode { value: value, admin_only: false, subcommands: HashMap::new(), hidden: false, sound: String::new() }
     }
 
     pub fn new_easter(value: CmdValue) -> CommandNode {
-        CommandNode { value: value, admin_only: false, subcommands: HashMap::new(), hidden: true }
+        CommandNode { value: value, admin_only: false, subcommands: HashMap::new(), hidden: true, sound: String::new() }
     }
 }
 
