@@ -325,6 +325,9 @@ impl IRCBotClient {
                 log_res("Tested audio.");
                 self.audio.play();
             }
+            "internal:cancel" => {
+                self.audio.stop();
+            }
             _ => {
                 log_res("! Not yet equipped to handle this command.");
                 return Command::Continue;

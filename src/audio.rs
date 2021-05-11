@@ -30,11 +30,15 @@ impl Audio {
     pub fn play_file(&self, filename: &String) {
         let file = match File::open(filename) {
             Ok(x) => x,
-            Err(e) => return
+            Err(_) => return // this should print
         };
         let source = rodio::Decoder::new(BufReader::new(file)).unwrap();
 
         self.sink.as_ref().unwrap().append(source);
         // this might just immediately play, we'll see
+    }
+
+    pub fn stop(&self) {
+        self.sink.as_ref().unwrap().stop();
     }
 }

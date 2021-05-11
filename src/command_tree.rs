@@ -1,9 +1,9 @@
+use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::Read;
-use std::collections::{HashMap, HashSet};
-use std::path::Path;
-use serde::{Serialize, Deserialize};
 use std::iter::Peekable;
+use std::path::Path;
 use std::str::Split;
 
 /* CommandTree - A (strange) tree implementation.
@@ -17,7 +17,7 @@ use std::str::Split;
  *  16/08 - Unlikely to follow through with most of this. Will probably use a KV store instead.
  *  Then can use trees for subcommands. Not a big deal to be missing autocomplete, & can still have
  *  case insensitivity (as lazy as it would have been before).
- *  
+ *
  *  JSON should look like:
  *
  *  {
@@ -26,11 +26,21 @@ use std::str::Split;
  */
 
 // lol
-fn get_true_lol() -> bool { true }
-fn get_false_lol() -> bool { false }
-fn default_ver() -> String { "0.0.0".to_string() }
-fn default_host() -> String { "irc.chat.twitch.tv".to_string() }
-fn default_port() -> String { "6667".to_string() }
+fn get_true_lol() -> bool {
+    true
+}
+fn get_false_lol() -> bool {
+    false
+}
+fn default_ver() -> String {
+    "0.0.0".to_string()
+}
+fn default_host() -> String {
+    "irc.chat.twitch.tv".to_string()
+}
+fn default_port() -> String {
+    "6667".to_string()
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub enum CmdValue {
@@ -58,11 +68,33 @@ pub struct CommandNode {
 
 impl CommandNode {
     pub fn new(value: CmdValue) -> CommandNode {
-        CommandNode { value: value, admin_only: false, subcommands: HashMap::new(), hidden: false, sound: String::new() }
+        CommandNode {
+            value,
+            admin_only: false,
+            subcommands: HashMap::new(),
+            hidden: false,
+            sound: String::new(),
+        }
     }
 
     pub fn new_easter(value: CmdValue) -> CommandNode {
-        CommandNode { value: value, admin_only: false, subcommands: HashMap::new(), hidden: true, sound: String::new() }
+        CommandNode {
+            value,
+            admin_only: false,
+            subcommands: HashMap::new(),
+            hidden: true,
+            sound: String::new(),
+        }
+    }
+
+    pub fn new_private(value: CmdValue) -> CommandNode {
+        CommandNode {
+            value,
+            admin_only: true,
+            subcommands: HashMap::new(),
+            hidden: true,
+            sound: String::new(),
+        }
     }
 }
 
@@ -79,7 +111,11 @@ pub struct CommandTree {
 }
 
 impl CommandTree {
-    pub fn find_subcommands<'a>(&self, itr: &mut Peekable<Split<char>>, node: &'a CommandNode) -> &'a CommandNode {
+    pub fn find_subcommands<'a>(
+        &self,
+        itr: &mut Peekable<Split<char>>,
+        node: &'a CommandNode,
+    ) -> &'a CommandNode {
         // Now we find subcommands!
         match itr.peek() {
             Some(s) => {
@@ -94,10 +130,10 @@ impl CommandTree {
                         let _ = itr.next();
                         self.find_subcommands(itr, n)
                     }
-                    None => node
+                    None => node,
                 }
             }
-            None => node
+            None => node,
         }
     }
 
@@ -111,7 +147,7 @@ impl CommandTree {
         let mut itr = key.as_str().split(' ').peekable();
         let cmd = match itr.next() {
             Some(s) => s,
-            None => return None
+            None => return None,
         };
         /* after we're done, we do itr.collect::<Vec<String>>().join(' ') */
         match self.commands.get(&cmd.to_lowercase()) {
@@ -126,18 +162,17 @@ impl CommandTree {
                         let ret = Some(self.find_subcommands(&mut itr, res));
                         *key = String::from(itr.collect::<Vec<&str>>().join(" "));
                         ret
-                    }
-                    else {
+                    } else {
                         None
                     }
-                },
+                }
                 _ => {
                     let ret = Some(self.find_subcommands(&mut itr, node));
                     *key = String::from(itr.into_iter().collect::<Vec<&str>>().join(" "));
                     ret
                 }
             },
-            None => None
+            None => None,
         }
     }
 
@@ -145,12 +180,15 @@ impl CommandTree {
         match self.commands.get(key) {
             Some(node) => match &node.value {
                 CmdValue::Alias(k) => {
-                    if prev.insert(k.clone()) { self.find_recurse(&k, prev) }
-                    else { None }
+                    if prev.insert(k.clone()) {
+                        self.find_recurse(&k, prev)
+                    } else {
+                        None
+                    }
                 }
-                _ => Some(node)
+                _ => Some(node),
             },
-            None => None
+            None => None,
         }
     }
 
@@ -158,7 +196,7 @@ impl CommandTree {
         for (key, _value) in &ct.commands {
             for c in key.chars() {
                 if c.is_uppercase() {
-                    return false
+                    return false;
                 }
             }
         }
@@ -166,14 +204,23 @@ impl CommandTree {
     }
 
     pub fn from_json_file(filename: &Path) -> CommandTree {
-        let mut file = File::open(filename).expect(&format!("Could not open file: {}", filename.display()));
+        let mut file =
+            File::open(filename).expect(&format!("Could not open file: {}", filename.display()));
         let mut contents = String::new();
-        file.read_to_string(&mut contents).expect(&format!("Could not read file {} to string.", filename.display()));
+        file.read_to_string(&mut contents).expect(&format!(
+            "Could not read file {} to string.",
+            filename.display()
+        ));
         CommandTree::from_json(serde_json::from_str(&contents).unwrap())
     }
 
     pub fn from_json(json: serde_json::Value) -> CommandTree {
-        serde_json::from_value(json).unwrap()
+        let mut ct: CommandTree = serde_json::from_value(json).unwrap();
+        ct.commands.insert(
+            String::from("rb:cancel"),
+            CommandNode::new_private(CmdValue::Generic(String::from("internal:cancel"))),
+        );
+        ct
     }
 
     pub fn dump_file(&self, path: &Path) {
@@ -186,11 +233,11 @@ impl CommandTree {
             // only overwrites though. not a big deal.
             true => panic!("Cannot setup new command tree; path already exists!"),
             false => {
-                let mut ct = CommandTree { 
+                let mut ct = CommandTree {
                     commands: HashMap::new(),
                     version: default_ver(),
                     port: default_port(),
-                    host: default_host() 
+                    host: default_host(),
                 };
                 ct.commands.insert("json".to_string(), 
                                    CommandNode::new_easter(
